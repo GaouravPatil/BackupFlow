@@ -1,0 +1,66 @@
+{
+  "title": "BackupFlow V1 — API & Jobs",
+  "uid": "backupflow-v1",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Total jobs created",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "targets": [{"expr": "backup_jobs_created_total", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Succeeded",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "targets": [{"expr": "backup_jobs_succeeded_total", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Failed",
+      "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+      "targets": [{"expr": "backup_jobs_failed_total", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Running jobs",
+      "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+      "targets": [{"expr": "backup_jobs_running", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Success / failure rate",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 6},
+      "targets": [
+        {"expr": "rate(backup_jobs_succeeded_total[5m])", "legendFormat": "success/s", "refId": "A"},
+        {"expr": "rate(backup_jobs_failed_total[5m])", "legendFormat": "failed/s", "refId": "B"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "API latency p95",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 6},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket[5m])) by (le, uri))", "legendFormat": "{{uri}}", "refId": "A"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP errors (5xx)",
+      "gridPos": {"x": 0, "y": 10, "w": 12, "h": 6},
+      "targets": [
+        {"expr": "sum(rate(http_server_requests_seconds_count{status=~\"5..\"}[5m]))", "refId": "A"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Avg job execution duration",
+      "gridPos": {"x": 12, "y": 10, "w": 12, "h": 6},
+      "targets": [
+        {"expr": "rate(backup_job_execution_duration_seconds_sum[5m]) / rate(backup_job_execution_duration_seconds_count[5m])", "legendFormat": "avg seconds", "refId": "A"}
+      ]
+    }
+  ]
+}
