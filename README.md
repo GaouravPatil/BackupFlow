@@ -2,7 +2,7 @@
 
 > "A small enterprise-style Java service I built to practice the complete software engineering lifecycle — from REST API and database design through testing, containerization, CI and observability."
 
-V1 implements a production-shaped REST service for creating and tracking backup jobs, persisting state in PostgreSQL, testing, containerizing with Docker, CI with GitHub Actions, and metrics via Actuator → Prometheus → Grafana.
+V1 implements a production-shaped REST service for creating and tracking backup jobs, persisting state in H2 (local) or PostgreSQL (Docker), testing, containerizing with Docker, CI with GitHub Actions, and metrics via Actuator → Prometheus → Grafana.
 
 **Out of scope for V1:** real file copy to S3, RabbitMQ, Redis, Kubernetes, JWT auth, scheduler, multi-region replication.
 
@@ -13,12 +13,38 @@ Client (curl)
   ↓ HTTP/JSON :8080
 Spring Boot REST API (controller → service → JPA)
   ↓
-PostgreSQL :5432
+H2 in-memory (local) / PostgreSQL :5432 (Docker)
 
 Actuator /actuator/prometheus → Prometheus :9090 → Grafana :3000
 ```
 
 Packages: `controller` (thin), `service` (business logic + state machine), `repository` (JPA), `entity`/`dto`, `exception`, `config`.
+
+## How it works (beginner-friendly)
+
+Think of a courier office:
+
+| Office | BackupFlow |
+|---|---|
+| You fill a parcel form | `POST /api/backups` with JSON |
+| Clerk checks the form | Validation (`source`/`destination` must not be blank) |
+| Form is written in the register | Job row saved in `backup_jobs` |
+| Worker processes the parcel | Status moves `PENDING → RUNNING → SUCCESS/FAILED` (simulated) |
+| You ask where it is | `GET /api/backups/{id}` |
+| Parcel failed, resend it | `POST /api/backups/{id}/retry` |
+
+Request flow: `Client → BackupController → BackupService → BackupRepository → DB`.
+The controller only handles HTTP; the service owns the rules/state machine; the repository handles database access.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| HTTP | `controller/BackupController.java` | URLs and status codes (201/200/202/204) |
+| Business logic | `service/BackupService.java` | State machine, retry rules, metrics, simulation |
+| Persistence | `repository/BackupRepository.java` | CRUD via Spring Data JPA |
+| Data model | `entity/BackupJob.java`, `entity/BackupStatus.java` | Table + allowed statuses |
+| JSON | `dto/CreateBackupRequest.java`, `dto/BackupResponse.java` | Input validation / output shape |
+| Errors | `exception/GlobalExceptionHandler.java` | 400/404/409 JSON responses |
+| Demo data | `config/DataSeeder.java` | Seeds 3 jobs when the table is empty |
 
 ## Job state machine
 
@@ -31,7 +57,7 @@ V1 has no real backup engine. `BackupService.simulateExecutionAsync` simulates e
 
 ## Tech
 
-Java 21, Spring Boot 3.3.5, Spring Web / Data JPA / Validation, PostgreSQL 16, Maven, JUnit 5 + Mockito + AssertJ, Docker Compose, GitHub Actions, Actuator + Micrometer Prometheus.
+Java 21, Spring Boot 3.3.5, Spring Web / Data JPA / Validation, embedded H2 for local runs, PostgreSQL 16 for Docker Compose, Maven, JUnit 5 + Mockito + AssertJ, Docker Compose, GitHub Actions, Actuator + Micrometer Prometheus.
 
 ## Quickstart
 
@@ -50,14 +76,29 @@ Services:
 | Prometheus | http://localhost:9090 |
 | Grafana | http://localhost:3000 (admin/admin) |
 
-### Option B — Local Maven + local Postgres
+### Option B — Local Maven (embedded H2, no Postgres needed)
 
 ```bash
-createdb -U postgres backupflow   # or use docker postgres only
+mvn spring-boot:run
+```
+
+The app starts on `http://localhost:8080` with an in-memory H2 database. Open the H2 console at `http://localhost:8080/h2-console`:
+
+| Field | Value |
+|---|---|
+| JDBC URL | `jdbc:h2:mem:backupflow` |
+| User | `sa` |
+| Password | *(blank)* |
+
+Run `SELECT * FROM BACKUP_JOBS;` to inspect the data. H2 is in-memory, so data resets on every restart and is re-seeded automatically.
+
+### Option C — Local Maven + local Postgres
+
+```bash
+createdb -U postgres backupflow
 export DB_URL=jdbc:postgresql://localhost:5432/backupflow
 export DB_USERNAME=backupflow
 export DB_PASSWORD=backupflow
-export SERVER_PORT=8080
 mvn spring-boot:run
 ```
 
@@ -68,6 +109,18 @@ mvn test
 mvn package
 java -jar target/*.jar
 ```
+
+## Demo data
+
+`config/DataSeeder.java` runs on startup and inserts demo jobs **only when `backup_jobs` is empty**:
+
+| Source | Destination | Final status |
+|---|---|---|
+| `/data/customer-001` | `s3://backup-bucket/customer-001` | `SUCCESS` |
+| `/data/customer-002` | `s3://backup-bucket/customer-002` | `SUCCESS` |
+| `/data/customer-003` | `s3://backup-bucket/fail-demo` | `FAILED` |
+
+This makes the API, H2 console and dashboards non-empty immediately. Restarting H2 clears the data and the seeder runs again.
 
 ## API
 
@@ -131,14 +184,16 @@ curl -s localhost:8080/actuator/prometheus | grep backup_jobs
 
 ## Configuration
 
-Env vars (see `application.properties`):
+Defaults to embedded H2; every value is env-overridable (see `application.properties`):
 
 ```
-DB_URL=jdbc:postgresql://postgres:5432/backupflow
-DB_USERNAME=backupflow
-DB_PASSWORD=<local-secret>
+DB_URL=jdbc:h2:mem:backupflow;DB_CLOSE_DELAY=-1   # or jdbc:postgresql://postgres:5432/backupflow
+DB_USERNAME=sa                                     # backupflow for Postgres
+DB_PASSWORD=                                       # <local-secret> for Postgres
 SERVER_PORT=8080
 ```
+
+The H2 web console is enabled at `/h2-console` for local development.
 
 ## Testing
 
@@ -158,7 +213,8 @@ mvn test
 
 | Symptom | Fix |
 |---|---|
-| `Connection to localhost:5432 refused` | `docker compose up postgres`, check `DB_URL` (local: `localhost`, compose: `postgres`) |
+| `Connection to localhost:5432 refused` | Only in Postgres mode: `docker compose up postgres`, check `DB_URL` (local: `localhost`, compose: `postgres`); unset `DB_URL` to use H2 |
+| H2 console empty / no rows | Wait for startup seeding (~5s), refresh; use JDBC URL `jdbc:h2:mem:backupflow`, user `sa`, blank password |
 | App starts before DB ready | Compose uses `service_healthy` + `pg_isready`; locally wait for postgres |
 | `404` on retry/get | Job id doesn't exist or was deleted |
 | `409` on retry | Only `FAILED` can be retried |
