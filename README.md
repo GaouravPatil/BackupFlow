@@ -4,7 +4,7 @@
 
 V1 implements a production-shaped REST service for creating and tracking backup jobs, persisting state in H2 (local) or PostgreSQL (Docker), testing, containerizing with Docker, CI with GitHub Actions, and metrics via Actuator → Prometheus → Grafana.
 
-**Out of scope for V1:** real file copy to S3, RabbitMQ, Redis, Kubernetes, JWT auth, scheduler, multi-region replication.
+**future Implementation:** real file copy to S3, RabbitMQ, Redis, Kubernetes, JWT auth, scheduler, multi-region replication.
 
 ## Architecture
 
